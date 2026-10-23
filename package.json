@@ -1,0 +1,102 @@
+{
+  "name": "choibox",
+  "productName": "Choibox",
+  "version": "1.12.0",
+  "description": "Hop thu chung Facebook Page, Zalo ca nhan va Zalo OA - Choiagency",
+  "author": "Choiagency",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "desktop": "electron .",
+    "test": "node --test tests.mjs workspace-features.test.mjs customer-profile.test.mjs desktop/config.test.mjs connect-service.test.mjs cloudflare/core.test.mjs deploy/connect/legacy-forwarder.test.mjs zalo-personal.test.mjs zalo-recovery.test.mjs media-cache.test.mjs",
+    "test:cloudflare": "node --test cloudflare/core.test.mjs",
+    "build:mac": "electron-builder --mac zip --x64 --arm64 --publish never",
+    "build:win": "electron-builder --win zip --x64 --publish never"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3",
+    "pe-library": "^2.0.1",
+    "resedit": "^3.1.0"
+  },
+  "build": {
+    "appId": "top.choiagency.choibox",
+    "productName": "Choibox",
+    "copyright": "Copyright © 2026 Choiagency",
+    "asar": true,
+    "directories": {
+      "output": "../Choibox-release",
+      "buildResources": "build"
+    },
+    "files": [
+      "desktop/**/*",
+      "public/**/*",
+      "server.mjs",
+      "package.json",
+      "choibox-connection.json",
+      "facebook-connect.mjs",
+      "facebook-history.mjs",
+      "shared-facebook.mjs",
+      "connect-service.mjs",
+      "workspace-features.mjs",
+      "customer-profile.mjs",
+      "zalo-personal.mjs",
+      "zalo-content.mjs",
+      "zalo-recovery.mjs",
+      "media-cache.mjs"
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "build/icon.icns",
+      "target": [
+        "zip"
+      ],
+      "identity": null,
+      "extraResources": [
+        {
+          "from": "build/cloudflared/mac-${arch}/cloudflared",
+          "to": "cloudflared"
+        }
+      ]
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "zip"
+      ],
+      "signAndEditExecutable": false,
+      "extraResources": [
+        {
+          "from": "build/cloudflared/win-${arch}/cloudflared.exe",
+          "to": "cloudflared.exe"
+        }
+      ]
+    },
+    "artifactName": "Choibox-${version}-${os}-${arch}.${ext}",
+    "afterPack": "desktop/after-pack.cjs",
+    "extraResources": [
+      {
+        "from": "build/cloudflared/LICENSE",
+        "to": "licenses/cloudflared-LICENSE.txt"
+      },
+      {
+        "from": "build/cloudflared/manifest.json",
+        "to": "licenses/cloudflared-manifest.json"
+      },
+      {
+        "from": "node_modules/zca-js/LICENSE",
+        "to": "licenses/zca-js-LICENSE.txt"
+      }
+    ]
+  },
+  "dependencies": {
+    "image-size": "2.0.4",
+    "zca-js": "2.2.0"
+  }
+}
