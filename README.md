@@ -1,4 +1,4 @@
-# Choibox 1.12.0 — mã nguồn máy chủ
+# Choibox 1.12.1 — mã nguồn máy chủ
 
 Gói mã nguồn dành cho VPS Linux, không chứa dữ liệu chạy thật, khoá riêng hoặc gói ứng dụng Mac/Windows. Chưa có bộ cài VPS một lệnh hay cấu hình HTTPS tự động.
 
@@ -26,3 +26,9 @@ Tin nhắn chữ, khách hàng, thẻ và đơn hàng lưu trong SQLite. Tệp m
 Có mã máy chủ, giao diện và kiểm thử. cloudflare/deploy chỉ gồm mã phụ trợ cần cho kiểm thử, không chứa cấu hình triển khai cũ. Không có tài nguyên/binary đóng gói desktop; các lệnh build Mac/Windows không dùng trong gói VPS. Chưa bao gồm scripts tự cài, cập nhật và khôi phục VPS.
 
 Được phát triển bởi [Choiagency](https://choiagency.top).
+
+## Bản 1.12.1
+- Xem ảnh lớn trong Choibox; trình xem video có điều khiển và tải xuống.
+- Hỗ trợ HTTP Range cho phát/tua tệp, giữ nguyên phân quyền.
+- Gom tin cùng người gửi trong 5 phút, tách ngày và chỉ hiện giờ cuối nhóm.
+- Một số codec video có thể cần tải về để xem bằng ứng dụng khác.

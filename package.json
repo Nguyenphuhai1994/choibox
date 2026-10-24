@@ -1,7 +1,7 @@
 {
   "name": "choibox",
   "productName": "Choibox",
-  "version": "1.12.0",
+  "version": "1.12.1",
   "description": "Hop thu chung Facebook Page, Zalo ca nhan va Zalo OA - Choiagency",
   "author": "Choiagency",
   "license": "UNLICENSED",
@@ -11,7 +11,7 @@
   "scripts": {
     "start": "node server.mjs",
     "desktop": "electron .",
-    "test": "node --test tests.mjs workspace-features.test.mjs customer-profile.test.mjs desktop/config.test.mjs connect-service.test.mjs cloudflare/core.test.mjs deploy/connect/legacy-forwarder.test.mjs zalo-personal.test.mjs zalo-recovery.test.mjs media-cache.test.mjs",
+    "test": "node --test tests.mjs workspace-features.test.mjs customer-profile.test.mjs desktop/config.test.mjs connect-service.test.mjs cloudflare/core.test.mjs deploy/connect/legacy-forwarder.test.mjs zalo-personal.test.mjs zalo-recovery.test.mjs media-cache.test.mjs message-layout.test.mjs",
     "test:cloudflare": "node --test cloudflare/core.test.mjs",
     "build:mac": "electron-builder --mac zip --x64 --arm64 --publish never",
     "build:win": "electron-builder --win zip --x64 --publish never"

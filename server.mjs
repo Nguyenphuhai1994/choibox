@@ -289,7 +289,7 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
     }
     fail(404,'API không tồn tại.');
    }
-   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/workspace-ui.js':'workspace-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
+   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
    const type=f.endsWith('.png')?'image/png':f.endsWith('.js')?'text/javascript; charset=utf-8':f.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
    send(200,fs.readFileSync(path.join(ROOT,'public',f)),type,{'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
   }catch(e){send(e.status||500,{error:e.status?e.message:'Có lỗi xử lý. Vui lòng thử lại.'});}

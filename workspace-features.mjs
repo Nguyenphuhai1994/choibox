@@ -97,7 +97,17 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
    if(req.method==='DELETE'&&!m[2]){if(!allowed(u,c.channel_id,true)||a.message_id)problem(403,'Không thể bỏ tệp này.');cache.remove(a.id);run('DELETE FROM attachments WHERE id=?',a.id);return send(200,{ok:true});}
    if(req.method!=='GET')problem(405,'Thao tác không hỗ trợ.');a=await cache.load(a.id);
    conversation(u,a.conversation_id);if(m[2])return send(200,meta(a));
-   return send(200,Buffer.from(a.data),a.mime,{'Content-Disposition':`${/^(image|video|audio)\//.test(a.mime)?'inline':'attachment'}; filename="attachment"; filename*=UTF-8''${encodeURIComponent(a.name)}`,'Content-Security-Policy':"default-src 'none'; sandbox"});
+   const bytes=Buffer.from(a.data),headers={'Accept-Ranges':'bytes','Content-Length':String(bytes.length),'Content-Disposition':`${/^(image|video|audio)\//.test(a.mime)?'inline':'attachment'}; filename="attachment"; filename*=UTF-8''${encodeURIComponent(a.name)}`,'Content-Security-Policy':"default-src 'none'; sandbox"};
+   if(req.headers.range&&!req.headers['if-range']){
+    const range=/^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+    const start=range?(range[1]?Number(range[1]):Math.max(0,bytes.length-Number(range[2]))):NaN;
+    const end=range?(range[1]&&range[2]?Math.min(Number(range[2]),bytes.length-1):bytes.length-1):NaN;
+    if(!range||(!range[1]&&!range[2])||!Number.isSafeInteger(start)||!Number.isSafeInteger(end)||start>end||start>=bytes.length)
+     return send(416,Buffer.alloc(0),a.mime,{'Accept-Ranges':'bytes','Content-Range':`bytes */${bytes.length}`,'Content-Length':'0'});
+    const part=bytes.subarray(start,end+1);
+    return send(206,part,a.mime,{...headers,'Content-Length':String(part.length),'Content-Range':`bytes ${start}-${end}/${bytes.length}`});
+   }
+   return send(200,bytes,a.mime,headers);
   }
   if(p==='/api/tags'&&req.method==='POST'){if(u.role==='viewer'||!all('SELECT id FROM channels').some(c=>allowed(u,c.id,true)))problem(403,'Bạn chỉ có quyền xem.');const name=text(body.name,32),color=String(body.color||'');if(!name||!/^#[a-f0-9]{6}$/i.test(color))problem(400,'Tên hoặc màu thẻ không hợp lệ.');run('INSERT INTO tag_colors(name,color) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET color=excluded.color',name,color);audit(u,null,'Đổi màu thẻ',name);return send(200,{ok:true});}
   m=p.match(/^\/api\/orders\/(\d+)$/);if(m&&req.method==='PATCH'){const o=get('SELECT * FROM orders WHERE id=?',Number(m[1]));if(!o)problem(404,'Không tìm thấy đơn.');const c=conversation(u,o.conversation_id,true);if(u.role==='viewer')problem(403,'Bạn chỉ có quyền xem.');if(!['new','confirmed','shipping','completed','cancelled'].includes(body.status))problem(400,'Trạng thái đơn không hợp lệ.');const r=run('UPDATE orders SET status=?,version=version+1,updated=? WHERE id=? AND version=?',body.status,new Date().toISOString(),o.id,Number(body.version));if(!r.changes)problem(409,'Đơn đã được cập nhật. Tải lại rồi thử.');audit(u,c.id,'Cập nhật đơn hàng','CB'+o.id+' '+body.status);return send(200,{ok:true});}
