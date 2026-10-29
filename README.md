@@ -1,6 +1,15 @@
-# Choibox 1.13.1 — mã nguồn máy chủ
+# Choibox 1.14.0 — mã nguồn máy chủ
 
 Mã nguồn Choibox cho VPS Linux: Facebook Page, Facebook cá nhân, Zalo cá nhân/OA, hộp thư chung, phân quyền, thẻ khách hàng và đơn hàng.
+
+## Sản phẩm và tồn kho (1.14.0)
+- Quản trị viên thêm/sửa tên, SKU, ảnh, nội dung, đơn giá, số tồn hiện còn và trạng thái đang/ngừng bán ở mục Sản phẩm. Nhân viên xem danh mục và chọn sản phẩm khi tạo đơn trong chat.
+- Ảnh JPG/PNG/WebP chọn từ máy tối đa 10 MB được tối ưu xuống tối đa 512 KB. Ảnh danh mục lưu bền vững trong SQLite, không bị dọn như bộ nhớ đệm tệp chat.
+- Mỗi đơn mới dùng mã sản phẩm và đơn giá từ danh mục, trừ tồn ngay khi lưu. Không đủ tồn ở bất kỳ dòng nào thì toàn bộ lần tạo đơn bị hủy, không trừ dở hàng khác.
+- SQLite khóa giao dịch khi kiểm tra và trừ tồn để tránh bán vượt số lượng. Gửi lại cùng mã tạo đơn không trừ thêm lần nữa.
+- Hủy đơn hoàn tồn đúng một lần; mở lại đơn đã hủy cần đủ tồn và sản phẩm đang bán. Các trạng thái xác nhận/giao/hoàn tất không trừ thêm.
+- Đơn cũ từ trước 1.14.0 vẫn giữ nguyên, không tự trừ hay hoàn tồn vì chưa gắn mã sản phẩm. Đổi tên/giá sản phẩm không thay thông tin đã ghi trong đơn.
+- Biểu mẫu sửa sản phẩm có phiên bản; nếu vừa có đơn trừ kho, bản sửa cũ sẽ bị chặn để tránh ghi đè tồn. Bấm Tải lại sản phẩm rồi nhập lại số tồn mong muốn.
 
 ## Thay đổi 1.13.1
 - Thêm kết nối Facebook cá nhân, đăng nhập trực tiếp; không chạy ứng dụng Deplao. Connector viết riêng, dùng thư viện mautrix/meta ghim phiên bản.
@@ -49,14 +58,14 @@ Facebook cá nhân: Kênh kết nối → Thêm kênh → Facebook cá nhân. Đ
 Facebook Page/bình luận vẫn dùng luồng Meta chính thức và các quyền cần thiết. Cấu hình Meta chung/kích hoạt là cấu hình riêng của người triển khai, không kèm trong repository.
 
 ## Dữ liệu và bảo mật
-Tin nhắn chữ, khách hàng, thẻ, đơn hàng lưu trong SQLite. Tệp tải khi xem và lưu tạm trong DATA_DIR/media-cache; mặc định 7 ngày và 2 GB, có thể đổi ở Máy chủ & truy cập. Đường dẫn hết hạn có thể không tải lại được.
+Tin nhắn chữ, khách hàng, thẻ, đơn hàng, sản phẩm và ảnh danh mục lưu trong SQLite. Tệp tải khi xem và lưu tạm trong DATA_DIR/media-cache; mặc định 7 ngày và 2 GB, có thể đổi ở Máy chủ & truy cập. Đường dẫn hết hạn có thể không tải lại được.
 
 Mật khẩu/OTP Facebook cá nhân không được lưu. Cookie được mã hoá bằng khoá của Choibox; khoá thiết bị Messenger nằm trong DATA_DIR/facebook-devices và chưa mã hoá riêng ở tầng SQLite. Bảo vệ quyền truy cập và ổ đĩa chứa DATA_DIR.
 
 Không đưa data, cookie, secret.key, .env, token, cấu hình khách hàng hoặc khoá SSH lên GitHub. .gitignore hỗ trợ thao tác Git; vẫn kiểm tra danh sách khi tải bằng trình duyệt.
 
 ## Kiểm chứng và mã nguồn thư viện
-85 kiểm thử Node và 6 kiểm thử Go đã qua trên macOS Intel. Đã kiểm tra đăng nhập, gửi/nhận văn bản, khôi phục phiên, nhận/giải mã/phóng lớn ảnh JPEG và phát video MP4 thật. Binary Linux đã biên dịch nhưng chưa chạy thực tế trên VPS trong lần kiểm tra này.
+94 kiểm thử Node và 6 kiểm thử Go đã qua trên macOS Intel. Đã kiểm tra đăng nhập, gửi/nhận văn bản, khôi phục phiên, nhận/giải mã/phóng lớn ảnh JPEG và phát video MP4 thật. Phần sản phẩm đã kiểm tra thêm ảnh, lên đơn đủ tồn, chặn vượt tồn, hủy đơn hoàn tồn và giao diện 390 px. Các kiểm thử tồn kho bao gồm tạo đồng thời từ hai kết nối, ghi lại yêu cầu, nhiều sản phẩm bị lỗi, sửa tồn bị cũ và nâng cấp đơn hàng cũ. Binary Linux đã biên dịch nhưng chưa chạy thực tế trên VPS trong lần kiểm tra này.
 
 Connector có mã nguồn, go.mod/go.sum, bảng phụ thuộc, NOTICE và giấy phép AGPL-3.0-or-later trong connectors/facebook-personal. SHA-256 kiểm tra tính toàn vẹn, không phải chứng nhận an toàn hay kiểm toán mã độc.
 
