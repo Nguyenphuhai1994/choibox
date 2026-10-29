@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {mediaCache} from './media-cache.mjs';
 import {customerProfiles} from './customer-profile.mjs';
+import {reporting} from './reporting.mjs';
 import {productInventory} from './product-inventory.mjs';
 
 const problem=(status,message)=>{throw Object.assign(new Error(message),{status});};
@@ -18,6 +19,7 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
  CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,name TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,data BLOB NOT NULL,created TEXT NOT NULL,message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY,conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,request_id TEXT NOT NULL,customer TEXT NOT NULL,phone TEXT,address TEXT,items TEXT NOT NULL,shipping INTEGER NOT NULL,discount INTEGER NOT NULL,total INTEGER NOT NULL,note TEXT,status TEXT DEFAULT 'new',version INTEGER DEFAULT 1,created TEXT,updated TEXT,created_by INTEGER REFERENCES users(id),UNIQUE(conversation_id,request_id));`);
  const inventory=productInventory({db,audit});
+ const reports=reporting({db,allowed,inventory});
  if(!all('PRAGMA table_info(messages)').some(c=>c.name==='attachment_id'))db.exec('ALTER TABLE messages ADD COLUMN attachment_id TEXT');
  if(!all('PRAGMA table_info(messages)').some(c=>c.name==='order_id'))db.exec('ALTER TABLE messages ADD COLUMN order_id INTEGER');
  if(!all('PRAGMA table_info(conversations)').some(c=>c.name==='contact_id'))db.exec('ALTER TABLE conversations ADD COLUMN contact_id TEXT');
@@ -71,7 +73,8 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
   const message=image?{attachment:{type:'template',payload:{template_type:'media',elements:[{media_type:'image',attachment_id:token}]}}}:{attachment:{type:'file',payload:{token}}};return transport('https://openapi.zalo.me/v3.0/oa/message/cs',{method:'POST',headers:{'Content-Type':'application/json',access_token:s.access_token},body:JSON.stringify({recipient:{user_id:c.external_id},message})});
  }
  async function api({p,req,raw,body,u,send}){
-  if(inventory.api({p,req,body,u,send}))return true;
+  if(await reports.api({p,req,body,u,send}))return true;
+  if(await inventory.api({p,req,body,u,send}))return true;
   if(p==='/api/storage'){
    if(u.role!=='admin')problem(403,'Chỉ quản trị viên quản lý lưu trữ.');
    if(req.method==='GET')return send(200,cache.stats());

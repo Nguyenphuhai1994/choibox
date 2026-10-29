@@ -1,4 +1,5 @@
-import {randomUUID} from 'node:crypto';
+import {readProductFile} from './spreadsheet-data.mjs';
+import {randomUUID,createHash} from 'node:crypto';
 import {imageSize} from 'image-size';
 const fail=(status,message)=>{throw Object.assign(Error(message),{status});};
 const money=n=>Number.isSafeInteger(n)&&n>=0&&n<=100000000000;
@@ -9,6 +10,7 @@ export function productInventory({db,audit}){
  id INTEGER PRIMARY KEY,sku TEXT NOT NULL COLLATE NOCASE UNIQUE,name TEXT NOT NULL,description TEXT NOT NULL DEFAULT '',
  price INTEGER NOT NULL CHECK(price>=0),stock INTEGER NOT NULL CHECK(stock>=0),active INTEGER NOT NULL DEFAULT 1,
  version INTEGER NOT NULL DEFAULT 1,image BLOB,image_type TEXT,image_version INTEGER NOT NULL DEFAULT 0,created TEXT NOT NULL,updated TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS product_imports(request_id TEXT PRIMARY KEY,digest TEXT NOT NULL,count INTEGER NOT NULL,created TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS stock_movements(id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL REFERENCES products(id),
  delta INTEGER NOT NULL,balance INTEGER NOT NULL,reason TEXT NOT NULL,order_id INTEGER REFERENCES orders(id),user_id INTEGER REFERENCES users(id),created TEXT NOT NULL);
  `);
@@ -80,7 +82,43 @@ export function productInventory({db,audit}){
    return {ok:true};
   });
  }
- function api({p,req,body,u,send}){
+ function checkedRows(rows){
+  if(!Array.isArray(rows)||!rows.length||rows.length>500)fail(400,'Mỗi lần nhập từ 1 đến 500 sản phẩm.');
+  const seen=new Set(),errors=[],items=[];
+  rows.forEach((row,i)=>{try{
+   if(!row||typeof row!=='object')fail(400,'Dòng không hợp lệ.');
+   const d=normalize(row);if(!row.sku?.trim())fail(400,'Nhập mã sản phẩm để kiểm tra trùng.');
+   if(seen.has(d.sku))fail(400,'Mã bị trùng trong file: '+d.sku);
+   if(get('SELECT id FROM products WHERE sku=? COLLATE NOCASE',d.sku))fail(409,'Mã đã có trong Choibox: '+d.sku);
+   seen.add(d.sku);items.push({...d,row:row.row||i+2});
+  }catch(e){errors.push({row:row?.row||i+2,message:e.message});}});
+  return {items,errors};
+ }
+ async function importApi({p,req,body,u,send}){
+  if(!['/api/products/import/preview','/api/products/import'].includes(p))return false;
+  if(u.role!=='admin')fail(403,'Chỉ quản trị viên nhập sản phẩm.');
+  if(req.method!=='POST')fail(405,'Thao tác không hỗ trợ.');
+  if(p.endsWith('/preview')){const rows=await readProductFile(body),checked=checkedRows(rows);return send(200,{...checked,total:rows.length});}
+  if(typeof body.request_id!=='string'||!/^[\w-]{10,80}$/.test(body.request_id))fail(400,'Thiếu mã lần nhập. Mở lại cửa sổ nhập file.');
+  const digest=createHash('sha256').update(JSON.stringify(body.rows)).digest('hex');
+  const result=atomic(()=>{
+   const old=get('SELECT * FROM product_imports WHERE request_id=?',body.request_id);
+   if(old){if(old.digest!==digest)fail(409,'Mã lần nhập đã dùng cho dữ liệu khác.');return {count:old.count,repeated:true};}
+   const {items,errors}=checkedRows(body.rows);if(errors.length)fail(409,errors.map(e=>'Dòng '+e.row+': '+e.message).slice(0,6).join('\n'));
+   const time=timestamp();
+   for(const d of items){
+    const id=Number(run('INSERT INTO products(sku,name,description,price,stock,active,created,updated) VALUES(?,?,?,?,?,?,?,?)',d.sku,d.name,d.description,d.price,d.stock,d.active,time,time).lastInsertRowid);
+    if(d.stock)run('INSERT INTO stock_movements(product_id,delta,balance,reason,user_id,created) VALUES(?,?,?,?,?,?)',id,d.stock,d.stock,'import',u.id,time);
+   }
+   run('INSERT INTO product_imports(request_id,digest,count,created) VALUES(?,?,?,?)',body.request_id,digest,items.length,time);
+   audit(u,null,'Nhập sản phẩm từ trang tính',items.length+' sản phẩm');
+   return {count:items.length};
+  });
+  return send(200,result);
+ }
+
+ async function api({p,req,body,u,send}){
+  if(await importApi({p,req,body,u,send}))return true;
   if(p==='/api/products'&&req.method==='GET')return send(200,state());
   const match=p.match(/^\/api\/products\/(\d+)(\/image)?$/);
   if(match&&match[2]&&req.method==='GET'){

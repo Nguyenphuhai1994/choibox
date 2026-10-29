@@ -147,7 +147,7 @@ export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRe
    const url=new URL(req.url,'http://localhost'),p=url.pathname;
    const upload=/^\/api\/conversations\/\d+\/attachments$/.test(p)&&req.method==='POST';
    if(upload){const token=(req.headers.cookie||'').match(/(?:^|;\s*)session=([a-f0-9]+)/)?.[1],session=token&&get('SELECT * FROM sessions WHERE token=? AND expires>?',hash(token),Date.now());const u=session&&get('SELECT * FROM users WHERE id=? AND active=1',session.user_id);if(!u)fail(401,'Vui lòng đăng nhập.');if(req.headers['x-csrf-token']!==session.csrf)fail(403,'Phiên không hợp lệ.');conversation(u,Number(p.split('/')[3]),true);}
-   let raw=Buffer.alloc(0);if(req.method!=='GET'){const parts=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>(upload?MAX_ATTACHMENT:1024*1024))fail(413,'Dữ liệu quá lớn.');parts.push(chunk);}raw=Buffer.concat(parts);}
+   let raw=Buffer.alloc(0);if(req.method!=='GET'){const parts=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>(upload?MAX_ATTACHMENT:p==='/api/products/import/preview'?3*1024*1024:p==='/api/products/import'?4*1024*1024:1024*1024))fail(413,'Dữ liệu quá lớn.');parts.push(chunk);}raw=Buffer.concat(parts);}
    let body={};if(raw.length&&!upload){try{body=JSON.parse(raw);}catch{fail(400,'JSON không hợp lệ.');}}
    if(p==='/oauth/facebook/callback'&&req.method==='GET')return await facebook.callback(url,send);
    const hm=p.match(/^\/webhooks\/(facebook|zalo)(?:\/(\d+))?$/);
@@ -179,7 +179,7 @@ export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRe
    const localHost=new URL('http://'+(req.headers.host||'')).hostname;
    const allowedHosts=networkConfig.allowedHosts(extraHosts+(publicUrl?','+new URL(publicUrl).hostname:''));
    if(!allowedHosts.includes(localHost))fail(403,'Địa chỉ truy cập không được cho phép.');
-   if(p==='/api/health'&&req.method==='GET')return send(200,{app:'Choibox',version:'1.14.0'});
+   if(p==='/api/health'&&req.method==='GET')return send(200,{app:'Choibox',version:'1.15.0'});
    if(p==='/api/bootstrap'&&req.method==='GET')return send(200,{setup:!get('SELECT id FROM users LIMIT 1'),requires_setup_token:!!setupToken});
    const origin=req.headers.origin;if(origin){const o=new URL(origin);if(o.host!==req.headers.host||!['http:','https:'].includes(o.protocol))fail(403,'Nguồn yêu cầu không hợp lệ.');secure=secure||o.protocol==='https:';}
    if(p==='/api/setup'&&req.method==='POST'){
@@ -207,7 +207,7 @@ export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRe
     if(p==='/api/state'&&req.method==='GET'){
      const channels=all('SELECT * FROM channels').filter(c=>allowed(u,c.id)).map(c=>({...safeChannel(c),connection:channelStatus(c,{runtime:c.provider==='facebook_personal'?fbPersonal.connectionState(c.id):c.provider==='zalo_personal'?personal.connectionState(c.id):null}),...(c.provider==='zalo_personal'?{recovery:personal.syncState(c.id)}:{}),can_reply:allowed(u,c.id,true)}));const ids=new Set(channels.map(c=>c.id));
      const conv=all('SELECT c.*,ch.name channel_name,ch.provider,ch.mode,u.name assignee_name FROM conversations c JOIN channels ch ON ch.id=c.channel_id LEFT JOIN users u ON u.id=c.assignee WHERE c.hidden_local=0 ORDER BY updated DESC').filter(c=>ids.has(c.channel_id));
-     const names=new Set(conv.flatMap(c=>JSON.parse(c.tags)));return send(200,{...features.state(u),tag_colors:all('SELECT * FROM tag_colors').filter(t=>names.has(t.name)),channels,conversations:conv.map(c=>{const profile=features.profileState(c.id);return {...c,...profile,tags:JSON.parse(c.tags),preview:get("SELECT body FROM messages WHERE conversation_id=? AND kind NOT IN ('note','order') AND local_deleted=0 ORDER BY created DESC,id DESC LIMIT 1",c.id)?.body||''};}),users:all('SELECT id,name,role FROM users WHERE active=1'),replies:all('SELECT * FROM replies ORDER BY id')});
+     const names=new Set(conv.flatMap(c=>JSON.parse(c.tags)));return send(200,{...features.state(u),tag_colors:all('SELECT * FROM tag_colors').filter(t=>names.has(t.name)),channels,conversations:conv.map(c=>{const profile=features.profileState(c.id);return {...c,...profile,tags:JSON.parse(c.tags),last_kind:get("SELECT kind FROM messages WHERE conversation_id=? AND kind IN ('incoming','outgoing') AND local_deleted=0 ORDER BY created DESC,id DESC LIMIT 1",c.id)?.kind||'',preview:get("SELECT body FROM messages WHERE conversation_id=? AND kind NOT IN ('note','order') AND local_deleted=0 ORDER BY created DESC,id DESC LIMIT 1",c.id)?.body||''};}),users:all('SELECT id,name,role FROM users WHERE active=1'),replies:all('SELECT * FROM replies ORDER BY id')});
     }
     const moderation=p.match(/^\/api\/messages\/(\d+)\/moderate$/);
     if(moderation&&req.method==='POST'){
@@ -321,7 +321,7 @@ export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRe
     }
     fail(404,'API không tồn tại.');
    }
-   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/products-ui.js':'products-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/facebook-personal-ui.js':'facebook-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
+   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/products-ui.js':'products-ui.js','/ui-kit.js':'ui-kit.js','/reports-ui.js':'reports-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/facebook-personal-ui.js':'facebook-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
    const type=f.endsWith('.png')?'image/png':f.endsWith('.js')?'text/javascript; charset=utf-8':f.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
    send(200,fs.readFileSync(path.join(ROOT,'public',f)),type,{'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
   }catch(e){send(e.status||500,{error:e.status?e.message:'Có lỗi xử lý. Vui lòng thử lại.'});}
