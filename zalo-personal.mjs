@@ -202,5 +202,6 @@ export function zaloPersonal({db,encrypt,decrypt,ingest,avatarBytes,cacheIncomin
  function toggle(c,enabled){stop(c.id);if(enabled)void restore(channel(c.id));else health(c.id,'Kênh đang tạm dừng.');}
  function close(){if(closed)return;recovery.close();closed=true;mediaQueue.length=0;for(const f of flows.values())finish(f,'cancelled');flows.clear();for(const id of connections.keys())stop(id);}
  for(const c of all("SELECT * FROM channels WHERE provider='zalo_personal'")){health(c.id,c.enabled?'Đang khôi phục phiên Zalo…':'Kênh đang tạm dừng.');if(c.enabled)void restore(c);}
- return {api,profile,authorAvatar,send,check,toggle,stop,cancelSession,close,syncState:recovery.state};
+ function connectionState(id){const s=connections.get(id);return s?{connected:!!s.ready,connecting:!!(s.restoring||s.retry||s.connectTimer)}:null;}
+ return {api,profile,authorAvatar,send,connectionState,check,toggle,stop,cancelSession,close,syncState:recovery.state};
 }
