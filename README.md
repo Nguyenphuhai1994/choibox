@@ -1,6 +1,17 @@
-# Choibox 1.14.0 — mã nguồn máy chủ
+# Choibox 1.15.0 — mã nguồn máy chủ
 
 Mã nguồn Choibox cho VPS Linux: Facebook Page, Facebook cá nhân, Zalo cá nhân/OA, hộp thư chung, phân quyền, thẻ khách hàng và đơn hàng.
+
+## Thay đổi 1.15.0
+- Sản phẩm: nhập mới từ Excel .xlsx hoặc CSV UTF-8, tối đa 500 dòng / 2 MB; tải mẫu, xem trước và kiểm tra từng dòng. Mã trùng (trong file hoặc danh mục), số tồn/giá sai sẽ chặn cả lô. Nhập lại cùng mã lần nhập không tạo trùng. Không cập nhật đè tồn của sản phẩm đã có.
+- Mẫu gồm: Mã sản phẩm, Tên sản phẩm, Nội dung, Đơn giá, Tồn kho, Trạng thái (Đang bán/Ngừng bán hoặc 1/0). Sheet đầu tiên, dữ liệu giá trị, không dùng công thức. Ảnh bổ sung riêng sau khi nhập.
+- Xuất sản phẩm Excel/CSV theo tìm kiếm/bộ lọc hiện tại, không kèm ảnh. Lọc đang bán/còn hàng/sắp hết/hết hàng/ngừng bán, khoảng giá và ngưỡng sắp hết.
+- Đơn hàng: lọc Hôm nay, Hôm qua, Tuần này (thứ Hai), Tháng này hoặc ngày tuỳ chọn tối đa 366 ngày; kết hợp kênh và trạng thái. Xuất Excel/CSV đúng danh sách lọc, tối đa 10.000 đơn/lần; file bao gồm ngày tạo, khách, sản phẩm, tổng, phí, giảm giá, trạng thái và kênh.
+- Tổng quan: tin nhận/gửi, bình luận, ghi chú, hội thoại hoạt động, đang mở/chưa xử lý, đang xử lý, đã xử lý, chờ phản hồi, chưa phân công; đơn mới/xác nhận/đang giao/hoàn tất/huỷ và giá trị đơn. Dữ liệu theo kênh thật được cấp quyền, không tính kênh mẫu.
+- Ngày báo cáo/lọc đơn dùng giờ Việt Nam (UTC+7), bao gồm cả ngày kết thúc. Đơn hàng theo ngày tạo; trạng thái là trạng thái hiện tại, không phải ảnh chụp trạng thái cuối ngày trong quá khứ. Hội thoại tính khi có tin trong kỳ; chờ phản hồi = tin cuối của khách và chưa đóng. Hoàn tất do người dùng đánh dấu, chưa tích hợp xác nhận giao hàng tự động.
+- SVG icon cục bộ, danh sách hội thoại có trạng thái/người phụ trách, bộ lọc gọn; hồ sơ khách dạng bảng bên cạnh. Bố cục cho điện thoại, máy tính; không thay đổi dữ liệu/kết nối cũ.
+- ExcelJS 4.4.0, uuid override 11.1.1; xử lý file trên máy chủ Choibox, không gửi file cho dịch vụ bên ngoài.
+- Cần chạy npm ci --omit=dev --ignore-scripts sau cập nhật để có thư viện Excel; giữ DATA_DIR và cấu hình dịch vụ đang dùng.
 
 ## Sản phẩm và tồn kho (1.14.0)
 - Quản trị viên thêm/sửa tên, SKU, ảnh, nội dung, đơn giá, số tồn hiện còn và trạng thái đang/ngừng bán ở mục Sản phẩm. Nhân viên xem danh mục và chọn sản phẩm khi tạo đơn trong chat.
