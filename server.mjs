@@ -179,7 +179,7 @@ export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRe
    const localHost=new URL('http://'+(req.headers.host||'')).hostname;
    const allowedHosts=networkConfig.allowedHosts(extraHosts+(publicUrl?','+new URL(publicUrl).hostname:''));
    if(!allowedHosts.includes(localHost))fail(403,'Địa chỉ truy cập không được cho phép.');
-   if(p==='/api/health'&&req.method==='GET')return send(200,{app:'Choibox',version:'1.13.1'});
+   if(p==='/api/health'&&req.method==='GET')return send(200,{app:'Choibox',version:'1.14.0'});
    if(p==='/api/bootstrap'&&req.method==='GET')return send(200,{setup:!get('SELECT id FROM users LIMIT 1'),requires_setup_token:!!setupToken});
    const origin=req.headers.origin;if(origin){const o=new URL(origin);if(o.host!==req.headers.host||!['http:','https:'].includes(o.protocol))fail(403,'Nguồn yêu cầu không hợp lệ.');secure=secure||o.protocol==='https:';}
    if(p==='/api/setup'&&req.method==='POST'){
@@ -321,7 +321,7 @@ export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRe
     }
     fail(404,'API không tồn tại.');
    }
-   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/facebook-personal-ui.js':'facebook-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
+   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/products-ui.js':'products-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/facebook-personal-ui.js':'facebook-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
    const type=f.endsWith('.png')?'image/png':f.endsWith('.js')?'text/javascript; charset=utf-8':f.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
    send(200,fs.readFileSync(path.join(ROOT,'public',f)),type,{'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
   }catch(e){send(e.status||500,{error:e.status?e.message:'Có lỗi xử lý. Vui lòng thử lại.'});}

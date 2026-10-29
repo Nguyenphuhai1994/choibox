@@ -1,6 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {mediaCache} from './media-cache.mjs';
 import {customerProfiles} from './customer-profile.mjs';
+import {productInventory} from './product-inventory.mjs';
 
 const problem=(status,message)=>{throw Object.assign(new Error(message),{status});};
 const text=(s,max=200)=>String(s??'').trim().slice(0,max);
@@ -16,6 +17,7 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
  CREATE TABLE IF NOT EXISTS tag_colors(name TEXT PRIMARY KEY,color TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,name TEXT NOT NULL,mime TEXT NOT NULL,size INTEGER NOT NULL,data BLOB NOT NULL,created TEXT NOT NULL,message_id INTEGER REFERENCES messages(id) ON DELETE CASCADE);
  CREATE TABLE IF NOT EXISTS orders(id INTEGER PRIMARY KEY,conversation_id INTEGER NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,request_id TEXT NOT NULL,customer TEXT NOT NULL,phone TEXT,address TEXT,items TEXT NOT NULL,shipping INTEGER NOT NULL,discount INTEGER NOT NULL,total INTEGER NOT NULL,note TEXT,status TEXT DEFAULT 'new',version INTEGER DEFAULT 1,created TEXT,updated TEXT,created_by INTEGER REFERENCES users(id),UNIQUE(conversation_id,request_id));`);
+ const inventory=productInventory({db,audit});
  if(!all('PRAGMA table_info(messages)').some(c=>c.name==='attachment_id'))db.exec('ALTER TABLE messages ADD COLUMN attachment_id TEXT');
  if(!all('PRAGMA table_info(messages)').some(c=>c.name==='order_id'))db.exec('ALTER TABLE messages ADD COLUMN order_id INTEGER');
  if(!all('PRAGMA table_info(conversations)').some(c=>c.name==='contact_id'))db.exec('ALTER TABLE conversations ADD COLUMN contact_id TEXT');
@@ -60,7 +62,7 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
  }
  const profiles=customerProfiles({db,decrypt,transport,avatarBytes,profileLink});
  const profile=(c,options)=>['zalo_personal','facebook_personal'].includes(get('SELECT provider FROM channels WHERE id=?',c.channel_id)?.provider)?personalProfile?.(c,options):profiles.profile(c,options);
- function state(u){const orders=all('SELECT o.*,c.channel_id,c.name conversation_name FROM orders o JOIN conversations c ON c.id=o.conversation_id ORDER BY o.id DESC').filter(o=>allowed(u,o.channel_id)).map(o=>({...o,items:JSON.parse(o.items)}));return {orders};}
+ function state(u){const orders=all('SELECT o.*,c.channel_id,c.name conversation_name FROM orders o JOIN conversations c ON c.id=o.conversation_id ORDER BY o.id DESC').filter(o=>allowed(u,o.channel_id)).map(o=>({...o,items:JSON.parse(o.items)}));return {orders,products:inventory.state()};}
  const attachmentsFor=id=>all('SELECT id,name,mime,size,media_kind,cache_disk,source,length(data)>0 has_data FROM attachments WHERE conversation_id=?',id).map(meta);
  function attachment(c,id){const a=get('SELECT * FROM attachments WHERE id=? AND conversation_id=?',id,c.id);if(!a||a.message_id)problem(400,'Tệp đã gửi hoặc không thuộc hội thoại này.');const data=cache.bytes(a);if(!data)problem(410,'Tệp chờ gửi không còn. Hãy chọn lại tệp.');return {...a,data};}
  async function sendAttachment(ch,c,a){const s=decrypt(ch.secret),kind=a.mime.startsWith('image/')?'image':a.mime.startsWith('video/')?'video':a.mime.startsWith('audio/')?'audio':'file';
@@ -69,6 +71,7 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
   const message=image?{attachment:{type:'template',payload:{template_type:'media',elements:[{media_type:'image',attachment_id:token}]}}}:{attachment:{type:'file',payload:{token}}};return transport('https://openapi.zalo.me/v3.0/oa/message/cs',{method:'POST',headers:{'Content-Type':'application/json',access_token:s.access_token},body:JSON.stringify({recipient:{user_id:c.external_id},message})});
  }
  async function api({p,req,raw,body,u,send}){
+  if(inventory.api({p,req,body,u,send}))return true;
   if(p==='/api/storage'){
    if(u.role!=='admin')problem(403,'Chỉ quản trị viên quản lý lưu trữ.');
    if(req.method==='GET')return send(200,cache.stats());
@@ -102,13 +105,28 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
     const id=randomUUID();run('INSERT INTO attachments(id,conversation_id,name,mime,size,data,created) VALUES(?,?,?,?,?,?,?)',id,c.id,name,mime,raw.length,Buffer.alloc(0),new Date().toISOString());try{cache.put(id,raw);}catch(e){run('DELETE FROM attachments WHERE id=?',id);throw e;}return send(201,{id,name,mime,size:raw.length});
    }
    if(action==='orders'&&req.method==='POST'){
-    if(!allowed(u,c.channel_id,true)||u.role==='viewer')problem(403,'Bạn chỉ có quyền xem.');const rid=text(body.request_id,80);if(!rid)problem(400,'Thiếu mã tạo đơn.');const old=get('SELECT id FROM orders WHERE conversation_id=? AND request_id=?',c.id,rid);if(old)return send(200,old);
-    const customer=text(body.customer),phone=text(body.phone,40),address=text(body.address,500),items=body.items;
-    if(!customer||!Array.isArray(items)||!items.length||items.length>30)problem(400,'Nhập người nhận và ít nhất một sản phẩm.');
-    const money=n=>Number.isSafeInteger(n)&&n>=0&&n<=100000000000;
-    for(const i of items)if(!i||typeof i!=='object'||!text(i.name)||!Number.isInteger(i.quantity)||i.quantity<1||i.quantity>10000||!money(i.price))problem(400,'Kiểm tra tên sản phẩm, số lượng và đơn giá.');
-    const shipping=body.shipping??0,discount=body.discount??0;if(!money(shipping)||!money(discount))problem(400,'Phí vận chuyển hoặc giảm giá không hợp lệ.');const total=items.reduce((s,i)=>s+i.quantity*i.price,0)+shipping-discount;if(!money(total))problem(400,'Tổng đơn không hợp lệ.');const time=new Date().toISOString();
-    db.exec('BEGIN IMMEDIATE');try{const r=run('INSERT INTO orders(conversation_id,request_id,customer,phone,address,items,shipping,discount,total,note,created,updated,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',c.id,rid,customer,phone,address,JSON.stringify(items.map(i=>({name:text(i.name),quantity:i.quantity,price:i.price}))),shipping,discount,total,text(body.note,1000),time,time,u.id);const id=Number(r.lastInsertRowid);run("INSERT INTO messages(conversation_id,kind,body,sender_id,created,status,order_id) VALUES(?,'order',?,?,?,'internal',?)",c.id,'Đơn hàng CB'+String(id).padStart(6,'0'),u.id,time,id);run('UPDATE conversations SET version=version+1 WHERE id=?',c.id);audit(u,c.id,'Tạo đơn hàng','CB'+id);db.exec('COMMIT');return send(201,{id});}catch(e){db.exec('ROLLBACK');throw e;}
+    if(!allowed(u,c.channel_id,true)||u.role==='viewer')problem(403,'Bạn chỉ có quyền xem.');const rid=text(body.request_id,80);if(!rid)problem(400,'Thiếu mã tạo đơn.');
+    let result,existing=false;
+    db.exec('BEGIN IMMEDIATE');
+    try{
+     const old=get('SELECT id FROM orders WHERE conversation_id=? AND request_id=?',c.id,rid);
+     if(old){result=old;existing=true;}
+     else{
+      const customer=text(body.customer),phone=text(body.phone,40),address=text(body.address,500);
+      if(!customer)problem(400,'Nhập tên người nhận.');
+      const items=inventory.orderItems(body.items),money=n=>Number.isSafeInteger(n)&&n>=0&&n<=100000000000;
+      const shipping=body.shipping??0,discount=body.discount??0;
+      if(!money(shipping)||!money(discount))problem(400,'Phí vận chuyển hoặc giảm giá không hợp lệ.');
+      const total=items.reduce((s,i)=>s+i.quantity*i.price,0)+shipping-discount;
+      if(!money(total))problem(400,'Tổng đơn không hợp lệ.');const time=new Date().toISOString();
+      const r=run("INSERT INTO orders(conversation_id,request_id,customer,phone,address,items,shipping,discount,total,note,created,updated,created_by,inventory_state) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,'reserved')",c.id,rid,customer,phone,address,JSON.stringify(items),shipping,discount,total,text(body.note,1000),time,time,u.id);
+      const id=Number(r.lastInsertRowid);inventory.reserve(items,u,id);
+      run("INSERT INTO messages(conversation_id,kind,body,sender_id,created,status,order_id) VALUES(?,'order',?,?,?,'internal',?)",c.id,'Đơn hàng CB'+String(id).padStart(6,'0'),u.id,time,id);
+      run('UPDATE conversations SET version=version+1 WHERE id=?',c.id);audit(u,c.id,'Tạo đơn hàng','CB'+id);result={id};
+     }
+     db.exec('COMMIT');
+    }catch(e){db.exec('ROLLBACK');throw e;}
+    return send(existing?200:201,result);
    }
    problem(405,'Thao tác không hỗ trợ.');
   }
@@ -129,7 +147,7 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
    return send(200,bytes,a.mime,headers);
   }
   if(p==='/api/tags'&&req.method==='POST'){if(u.role==='viewer'||!all('SELECT id FROM channels').some(c=>allowed(u,c.id,true)))problem(403,'Bạn chỉ có quyền xem.');const name=text(body.name,32),color=String(body.color||'');if(!name||!/^#[a-f0-9]{6}$/i.test(color))problem(400,'Tên hoặc màu thẻ không hợp lệ.');run('INSERT INTO tag_colors(name,color) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET color=excluded.color',name,color);audit(u,null,'Đổi màu thẻ',name);return send(200,{ok:true});}
-  m=p.match(/^\/api\/orders\/(\d+)$/);if(m&&req.method==='PATCH'){const o=get('SELECT * FROM orders WHERE id=?',Number(m[1]));if(!o)problem(404,'Không tìm thấy đơn.');const c=conversation(u,o.conversation_id,true);if(u.role==='viewer')problem(403,'Bạn chỉ có quyền xem.');if(!['new','confirmed','shipping','completed','cancelled'].includes(body.status))problem(400,'Trạng thái đơn không hợp lệ.');const r=run('UPDATE orders SET status=?,version=version+1,updated=? WHERE id=? AND version=?',body.status,new Date().toISOString(),o.id,Number(body.version));if(!r.changes)problem(409,'Đơn đã được cập nhật. Tải lại rồi thử.');audit(u,c.id,'Cập nhật đơn hàng','CB'+o.id+' '+body.status);return send(200,{ok:true});}
+  m=p.match(/^\/api\/orders\/(\d+)$/);if(m&&req.method==='PATCH'){const o=get('SELECT * FROM orders WHERE id=?',Number(m[1]));if(!o)problem(404,'Không tìm thấy đơn.');conversation(u,o.conversation_id,true);if(u.role==='viewer')problem(403,'Bạn chỉ có quyền xem.');if(!['new','confirmed','shipping','completed','cancelled'].includes(body.status))problem(400,'Trạng thái đơn không hợp lệ.');return send(200,inventory.updateOrder(o,body.status,body.version,u));}
   return false;
  }
  return {api,cache,attachmentMeta:id=>{const a=get('SELECT id,name,mime,size,media_kind,cache_disk,source,length(data)>0 has_data FROM attachments WHERE id=?',id);return a?meta(a):null;},close:()=>cache.close(),profile,profileState:profiles.publicState,state,attachment,attachmentsFor,sendAttachment,avatarBytes,cacheIncomingAttachment,cacheProviderAttachment};
