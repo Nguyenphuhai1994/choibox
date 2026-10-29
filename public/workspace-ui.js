@@ -12,9 +12,32 @@ export function workspaceUI(ctx){
  function tagChip(t,editable=false){const color=tagColor(t);return `<span class="tag color-tag" style="--tag-color:${color}"><span class="tag-dot"></span>${editable?`<button type="button" class="tag-label" data-tag-color="${esc(t)}" title="Đổi màu thẻ ${esc(t)}">${esc(t)}</button><button type="button" class="tag-remove" data-remove-tag="${esc(t)}" aria-label="Bỏ thẻ ${esc(t)}">×</button>`:esc(t)}</span>`;}
  const openedMedia=new Map();
  function attachmentHTML(a,sticker=false){const loaded=openedMedia.get(a.id);if(loaded)a={...a,...loaded};const url='/api/attachments/'+encodeURIComponent(a.id),label=sticker||a.media_kind==='sticker'?'Xem sticker':a.mime.startsWith('image/')||['image','gif'].includes(a.media_kind)?'Xem ảnh':a.mime.startsWith('video/')||a.media_kind==='video'?'Xem video':'Mở tệp';
-  if(!loaded)return `<div class="attachment-shell" data-attachment="${esc(a.id)}"><div class="attachment-placeholder">${icon('clip')}<strong>${esc(a.name)}</strong><small>${a.size?(a.size/1024/1024).toFixed(2)+' MB · ':''}Chỉ tải khi mở xem</small><button type="button" data-open-media="${esc(a.id)}">${label} ↓</button></div><p class="media-error" role="alert"></p></div>`;
+  if(!loaded)return `<div class="attachment-shell" data-attachment="${esc(a.id)}" ${/^(image|video)\//.test(a.mime)||['image','video','gif','sticker'].includes(a.media_kind)?'data-auto-media':''}><div class="attachment-placeholder">${icon('clip')}<strong>${esc(a.name)}</strong><small>${a.size?(a.size/1024/1024).toFixed(2)+' MB · ':''}Chỉ tải khi mở xem</small><button type="button" data-open-media="${esc(a.id)}">${label}</button></div><p class="media-error" role="alert"></p></div>`;
   return `<div class="attachment-shell" data-attachment="${esc(a.id)}"><div class="attachment-message ${sticker||a.media_kind==='sticker'?'sticker-message':''}">${a.mime.startsWith('image/')?`<button type="button" class="media-thumbnail" data-view-media="${esc(a.id)}" aria-label="Phóng lớn ảnh ${esc(a.name)}"><img src="${url}" alt="${esc(a.name)}" loading="lazy"></button>`:a.mime.startsWith('video/')?`<video controls playsinline preload="metadata" src="${url}" aria-label="${esc(a.name)}"></video><button type="button" data-view-media="${esc(a.id)}">Mở video lớn</button>`:a.mime.startsWith('audio/')?`<audio controls preload="none" src="${url}"></audio>`:''}<a class="file-link" href="${url}" download="${esc(a.name)}">${icon('clip')}<span>${esc(a.name)}<small>${(a.size/1024/1024).toFixed(2)} MB · Tải xuống</small></span></a></div><p class="media-error" role="alert"></p></div>`;
  }
+ const mediaLoads=new Map(),autoQueue=[],watched=new Set();let autoRunning=0;
+ async function prepareMedia(shell,open=false,trigger=null){
+  const id=shell.dataset.attachment;shell.removeAttribute('data-auto-media');
+  const button=shell.querySelector('[data-open-media]');if(button){button.disabled=true;button.textContent='Đang mở…';}
+  try{
+   let task=mediaLoads.get(id);
+   if(!task){task=api('/attachments/'+id+'/info').then(a=>{openedMedia.set(a.id,a);if(openedMedia.size>200)openedMedia.delete(openedMedia.keys().next().value);return a;}).finally(()=>mediaLoads.delete(id));mediaLoads.set(id,task);}
+   const a=await task;
+   if(shell.isConnected){const holder=shell.parentElement;shell.outerHTML=attachmentHTML(a,a.media_kind==='sticker');if(open){const next=[...holder.querySelectorAll('[data-view-media]')].find(el=>el.dataset.viewMedia===a.id);openMediaViewer(a,next||trigger);}}
+  }catch(e){if(shell.isConnected){shell.querySelector('.media-error').textContent=e.message;if(button){button.disabled=false;button.textContent='Thử xem lại';}}}
+ }
+ function pumpMedia(){while(autoRunning<2&&autoQueue.length){const shell=autoQueue.shift();if(!shell.isConnected)continue;autoRunning++;void prepareMedia(shell).finally(()=>{autoRunning--;pumpMedia();});}}
+ const observer=typeof IntersectionObserver==='function'?new IntersectionObserver(entries=>{
+  for(const entry of entries)if(entry.isIntersecting){observer.unobserve(entry.target);watched.delete(entry.target);entry.target.removeAttribute('data-auto-media');autoQueue.push(entry.target);}pumpMedia();
+ },{rootMargin:'120px'}):null;
+ function watchMedia(){
+  for(const shell of watched)if(!shell.isConnected){observer?.unobserve(shell);watched.delete(shell);}
+  for(const shell of document.querySelectorAll('.attachment-shell[data-auto-media]')){
+   if(watched.has(shell))continue;watched.add(shell);if(observer)observer.observe(shell);else{shell.removeAttribute('data-auto-media');autoQueue.push(shell);}
+  }
+  if(!observer)pumpMedia();
+ }
+ if(typeof MutationObserver==='function'){const changes=new MutationObserver(watchMedia);changes.observe($('#app'),{childList:true,subtree:true});}
  let mediaDialog=null;
  function openMediaViewer(a,trigger){
   if(!/^(image|video|audio)\//.test(a.mime))return;
@@ -48,7 +71,7 @@ export function workspaceUI(ctx){
  }
  document.addEventListener('error',e=>{if(e.target.matches?.('.customer-avatar img'))e.target.remove();if(e.target.matches?.('.attachment-shell img,.attachment-shell video,.attachment-shell audio')){const shell=e.target.closest('.attachment-shell');openedMedia.delete(shell.dataset.attachment);const id=shell.dataset.attachment;shell.innerHTML=`<p class="media-error" role="alert">Không mở được tệp. Đường dẫn hoặc bản lưu tạm có thể đã hết hạn.</p><button type="button" data-open-media="${esc(id)}">Thử tải lại</button>`;}},true);
  document.addEventListener('input',e=>{const f=e.target.closest('.order-form');if(f)calcOrder(f);});
- document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t)return;if(t.dataset.viewMedia){const a=openedMedia.get(t.dataset.viewMedia);if(a)openMediaViewer(a,t);return;}if(t.dataset.openMedia){const shell=t.closest('.attachment-shell');t.disabled=true;t.textContent='Đang tải…';try{const a=await api('/attachments/'+t.dataset.openMedia+'/info');openedMedia.set(a.id,a);if(openedMedia.size>200)openedMedia.delete(openedMedia.keys().next().value);if(shell.isConnected){const holder=shell.parentElement;shell.outerHTML=attachmentHTML(a,a.media_kind==='sticker');const trigger=[...holder.querySelectorAll('[data-view-media]')].find(el=>el.dataset.viewMedia===a.id);openMediaViewer(a,trigger);}}catch(err){if(shell.isConnected){shell.querySelector('.media-error').textContent=err.message;t.disabled=false;t.textContent='Thử tải lại';}}}if(t.dataset.orderFilter){orderFilter=t.dataset.orderFilter;const body=$('#body');body.innerHTML=ordersPage();body.querySelector(`[data-order-filter="${orderFilter}"]`)?.focus();}if(t.hasAttribute('data-add-order-item')){const host=$('#order-items');if(host.children.length<30)host.insertAdjacentHTML('beforeend',orderItem());}if(t.hasAttribute('data-remove-order-item')){const f=t.closest('form');if(f.querySelectorAll('.order-item').length>1){t.closest('.order-item').remove();calcOrder(f);}}
+ document.addEventListener('click',async e=>{const t=e.target.closest('button');if(!t)return;if(t.dataset.viewMedia){const a=openedMedia.get(t.dataset.viewMedia);if(a)openMediaViewer(a,t);return;}if(t.dataset.openMedia){await prepareMedia(t.closest('.attachment-shell'),true,t);return;}if(t.dataset.orderFilter){orderFilter=t.dataset.orderFilter;const body=$('#body');body.innerHTML=ordersPage();body.querySelector(`[data-order-filter="${orderFilter}"]`)?.focus();}if(t.hasAttribute('data-add-order-item')){const host=$('#order-items');if(host.children.length<30)host.insertAdjacentHTML('beforeend',orderItem());}if(t.hasAttribute('data-remove-order-item')){const f=t.closest('form');if(f.querySelectorAll('.order-item').length>1){t.closest('.order-item').remove();calcOrder(f);}}
   if(t.dataset.orderChat){try{await ctx.openChat(Number(t.dataset.orderChat));}catch(e){toast(e.message);}}
  });
  document.addEventListener('change',async e=>{const t=e.target;if(t.dataset.orderStatus){const o=read().state.orders.find(o=>o.id===Number(t.dataset.orderStatus));t.disabled=true;try{await api('/orders/'+o.id,'PATCH',{status:t.value,version:o.version});await ctx.reload();ctx.refreshMessages();}catch(e){toast(e.message);t.value=o.status;}finally{t.disabled=false;}}

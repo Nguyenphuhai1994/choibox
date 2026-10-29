@@ -26,3 +26,8 @@ build/
 work/
 outputs/
 .DS_Store
+
+# Prepared native files are generated from checked compressed artifacts.
+connectors/facebook-personal/bin/*/choibox-facebook
+connectors/facebook-personal/bin/*/choibox-facebook.exe
+connectors/facebook-personal/bin/*/*.tmp-*

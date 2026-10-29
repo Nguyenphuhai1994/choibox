@@ -10,7 +10,7 @@ export function profileLink(value,provider){
  if(!value)return '';try{const u=new URL(value);const hosts=provider==='facebook'?['facebook.com','www.facebook.com','m.facebook.com']:['zalo.me','www.zalo.me'];if(u.protocol!=='https:'||!hosts.includes(u.hostname)||u.username||u.password||u.port)return '';if(u.pathname==='/'||/access_token|code|token/i.test(u.search))return '';u.hash='';return u.href;}catch{return '';}
 }
 function cdnUrl(value){if(typeof value!=="string"||value.length>8192)return null;try{const u=new URL(value);if(u.protocol==='http:'&&['zdn.vn','zadn.vn','zaloapp.com'].some(d=>u.hostname.endsWith('.'+d)))u.protocol='https:';if(u.protocol!=='https:'||u.username||u.password||u.port||[...u.searchParams.keys()].some(k=>/access_token|appsecret/i.test(k)))return null;if(['fbcdn.net','fbsbx.com','facebook.com','zdn.vn','zadn.vn','zaloapp.com'].some(d=>u.hostname.endsWith('.'+d)))return u.href;}catch{}return null;}
-export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,conversation,audit,fetchImage=fetch,personalProfile,personalAuthorAvatar}){
+export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,conversation,audit,fetchImage=fetch,personalProfile,personalAuthorAvatar,providerMedia}){
  const get=(s,...p)=>db.prepare(s).get(...p),all=(s,...p)=>db.prepare(s).all(...p),run=(s,...p)=>db.prepare(s).run(...p);
  db.exec(`CREATE TABLE IF NOT EXISTS customer_profiles(conversation_id INTEGER PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,avatar BLOB,avatar_type TEXT,profile_url TEXT DEFAULT '',phone TEXT DEFAULT '',address TEXT DEFAULT '',checked INTEGER DEFAULT 0);
  CREATE TABLE IF NOT EXISTS tag_colors(name TEXT PRIMARY KEY,color TEXT NOT NULL);
@@ -25,7 +25,15 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
   }return null;
  }
  const avatarBytes=url=>downloadCdn(url,2*1024*1024,['image/jpeg','image/png','image/gif','image/webp']);
- const cache=mediaCache({db,dataDir,encrypt,decrypt,validUrl:cdnUrl,download:(url,a)=>downloadCdn(url,a.media_kind==='sticker'?2*1024*1024:MAX_ATTACHMENT,a.media_kind==='video'?['video/mp4','video/quicktime','video/webm']:['image','gif','sticker'].includes(a.media_kind)?['image/jpeg','image/png','image/gif','image/webp']:Object.values(formats).concat('application/octet-stream'),a.mime)});
+ const cache=mediaCache({db,dataDir,encrypt,decrypt,validUrl:cdnUrl,resolveSource:async(source,a)=>{
+  const c=get('SELECT channel_id FROM conversations WHERE id=?',a.conversation_id);
+  if(source.provider!=='facebook_personal'||!c||c.channel_id!==source.channel_id||!providerMedia)problem(410,'Không xác định được kênh của tệp.');
+  const result=await providerMedia(source.channel_id,source.descriptor);
+  const data=result?.data;if(!Buffer.isBuffer(data)||!data.length||data.length>MAX_ATTACHMENT)problem(413,'Tệp vượt quá giới hạn xem trước.');
+  const hex=data.subarray(0,12).toString('hex');let mime=hex.startsWith('89504e470d0a1a0a')?'image/png':hex.startsWith('ffd8ff')?'image/jpeg':/^GIF8[79]a/.test(data.subarray(0,6).toString())?'image/gif':data.subarray(0,4).toString()==='RIFF'&&data.subarray(8,12).toString()==='WEBP'?'image/webp':data.subarray(4,8).toString()==='ftyp'?(result.mime==='video/quicktime'?'video/quicktime':'video/mp4'):hex.startsWith('1a45dfa3')?'video/webm':'';
+  if(!mime)problem(415,'Định dạng ảnh/video này chưa được hỗ trợ xem trực tiếp.');
+  return {data,mime};
+ },download:(url,a)=>downloadCdn(url,a.media_kind==='sticker'?2*1024*1024:MAX_ATTACHMENT,a.media_kind==='video'?['video/mp4','video/quicktime','video/webm']:['image','gif','sticker'].includes(a.media_kind)?['image/jpeg','image/png','image/gif','image/webp']:Object.values(formats).concat('application/octet-stream'),a.mime)});
  const meta=a=>cache.describe(a);
  async function cacheIncomingAttachment(channelId,peer,messageId,url,title,{imageOnly=false,kind='',mime='',urls=[]}={}){
   try{const source=cache.source([url,...urls]);if(!source)return false;
@@ -39,8 +47,19 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
    run('UPDATE messages SET attachment_id=? WHERE id=?',id,m.id);return true;
   }catch{return false;}
  }
+ async function cacheProviderAttachment(channelId,peer,messageId,descriptor){
+  if(!descriptor?.encrypted||!['image','video'].includes(descriptor.kind)||!Number.isSafeInteger(descriptor.size)||descriptor.size<0||descriptor.size>MAX_ATTACHMENT||JSON.stringify(descriptor).length>32768)return false;
+  const m=get('SELECT m.id,m.local_deleted,m.attachment_id,c.id conversation_id,c.hidden_local,ch.enabled,ch.provider FROM messages m JOIN conversations c ON c.id=m.conversation_id JOIN channels ch ON ch.id=c.channel_id WHERE c.channel_id=? AND c.external_id=? AND m.external_id=?',channelId,peer,messageId);
+  if(!m||m.local_deleted||m.hidden_local||!m.enabled||m.provider!=='facebook_personal')return false;
+  const source=encrypt({provider:'facebook_personal',channel_id:channelId,descriptor});
+  const name=text(String(descriptor.name|| (descriptor.kind==='image'?'Ảnh Messenger.jpg':'Video Messenger.mp4')).replace(/[\\/\x00-\x1f]/g,'_'),180);
+  const mime=descriptor.kind==='video'?'video/mp4':['image/jpeg','image/png','image/webp','image/gif'].includes(descriptor.mime)?descriptor.mime:'image/jpeg';
+  if(m.attachment_id){run('UPDATE attachments SET source=?,retry_at=0 WHERE id=?',source,m.attachment_id);return true;}
+  const id=randomUUID();run('INSERT INTO attachments(id,conversation_id,name,mime,size,data,created,message_id,source,media_kind) VALUES(?,?,?,?,?,?,?,?,?,?)',id,m.conversation_id,name,mime,descriptor.size,Buffer.alloc(0),new Date().toISOString(),m.id,source,descriptor.kind);
+  run('UPDATE messages SET attachment_id=? WHERE id=?',id,m.id);return true;
+ }
  const profiles=customerProfiles({db,decrypt,transport,avatarBytes,profileLink});
- const profile=(c,options)=>get('SELECT provider FROM channels WHERE id=?',c.channel_id)?.provider==='zalo_personal'?personalProfile?.(c,options):profiles.profile(c,options);
+ const profile=(c,options)=>['zalo_personal','facebook_personal'].includes(get('SELECT provider FROM channels WHERE id=?',c.channel_id)?.provider)?personalProfile?.(c,options):profiles.profile(c,options);
  function state(u){const orders=all('SELECT o.*,c.channel_id,c.name conversation_name FROM orders o JOIN conversations c ON c.id=o.conversation_id ORDER BY o.id DESC').filter(o=>allowed(u,o.channel_id)).map(o=>({...o,items:JSON.parse(o.items)}));return {orders};}
  const attachmentsFor=id=>all('SELECT id,name,mime,size,media_kind,cache_disk,source,length(data)>0 has_data FROM attachments WHERE conversation_id=?',id).map(meta);
  function attachment(c,id){const a=get('SELECT * FROM attachments WHERE id=? AND conversation_id=?',id,c.id);if(!a||a.message_id)problem(400,'Tệp đã gửi hoặc không thuộc hội thoại này.');const data=cache.bytes(a);if(!data)problem(410,'Tệp chờ gửi không còn. Hãy chọn lại tệp.');return {...a,data};}
@@ -113,5 +132,5 @@ export function workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,
   m=p.match(/^\/api\/orders\/(\d+)$/);if(m&&req.method==='PATCH'){const o=get('SELECT * FROM orders WHERE id=?',Number(m[1]));if(!o)problem(404,'Không tìm thấy đơn.');const c=conversation(u,o.conversation_id,true);if(u.role==='viewer')problem(403,'Bạn chỉ có quyền xem.');if(!['new','confirmed','shipping','completed','cancelled'].includes(body.status))problem(400,'Trạng thái đơn không hợp lệ.');const r=run('UPDATE orders SET status=?,version=version+1,updated=? WHERE id=? AND version=?',body.status,new Date().toISOString(),o.id,Number(body.version));if(!r.changes)problem(409,'Đơn đã được cập nhật. Tải lại rồi thử.');audit(u,c.id,'Cập nhật đơn hàng','CB'+o.id+' '+body.status);return send(200,{ok:true});}
   return false;
  }
- return {api,cache,attachmentMeta:id=>{const a=get('SELECT id,name,mime,size,media_kind,cache_disk,source,length(data)>0 has_data FROM attachments WHERE id=?',id);return a?meta(a):null;},close:()=>cache.close(),profile,profileState:profiles.publicState,state,attachment,attachmentsFor,sendAttachment,avatarBytes,cacheIncomingAttachment};
+ return {api,cache,attachmentMeta:id=>{const a=get('SELECT id,name,mime,size,media_kind,cache_disk,source,length(data)>0 has_data FROM attachments WHERE id=?',id);return a?meta(a):null;},close:()=>cache.close(),profile,profileState:profiles.publicState,state,attachment,attachmentsFor,sendAttachment,avatarBytes,cacheIncomingAttachment,cacheProviderAttachment};
 }

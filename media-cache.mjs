@@ -4,7 +4,7 @@ import path from 'node:path';
 const DAY=86400000,EMPTY=Buffer.alloc(0);
 const fail=(status,message)=>{throw Object.assign(Error(message),{status});};
 // Only opaque attachment IDs are used as paths. Provider URLs stay encrypted in SQLite.
-export function mediaCache({db,dataDir,encrypt,decrypt,download,validUrl,clock=Date.now,intervalMs=900000}){
+export function mediaCache({db,dataDir,encrypt,decrypt,download,validUrl,resolveSource,clock=Date.now,intervalMs=900000}){
  const get=(s,...p)=>db.prepare(s).get(...p),all=(s,...p)=>db.prepare(s).all(...p),run=(s,...p)=>db.prepare(s).run(...p);
  const columns=all('PRAGMA table_info(attachments)').map(c=>c.name);
  for(const [name,type] of Object.entries({source:'TEXT',media_kind:"TEXT DEFAULT 'file'",cache_disk:'INTEGER DEFAULT 0',cached_at:'INTEGER DEFAULT 0',accessed_at:'INTEGER DEFAULT 0',retry_at:'INTEGER DEFAULT 0',cache_error:"TEXT DEFAULT ''"}))if(!columns.includes(name))db.exec(`ALTER TABLE attachments ADD COLUMN ${name} ${type}`);
@@ -60,8 +60,9 @@ export function mediaCache({db,dataDir,encrypt,decrypt,download,validUrl,clock=D
   if(!a.source)fail(410,'Bản lưu tạm đã được dọn và tệp này không có đường dẫn tải lại. Hãy mở tin gốc trên Facebook/Zalo.');
   if(pending.has(id))return pending.get(id);if(a.retry_at>clock())fail(410,a.cache_error||'Chưa tải lại được tệp.');if(pending.size>=4)fail(429,'Đang tải nhiều tệp. Vui lòng thử lại sau.');
   const task=Promise.resolve().then(async()=>{active++;try{
-   const urls=decrypt(a.source).urls;let result;
-   for(const url of urls){if(closed)fail(503,'Choibox đang dừng.');result=await download(url,a);if(result?.data?.length)break;}
+   const source=decrypt(a.source);let result;
+   if(source.provider){if(!resolveSource)fail(410,'Kênh này chưa hỗ trợ mở lại tệp.');result=await resolveSource(source,a);}
+   else for(const url of source.urls||[]){if(closed)fail(503,'Choibox đang dừng.');result=await download(url,a);if(result?.data?.length)break;}
    if(closed)fail(503,'Choibox đang dừng.');a=row();if(!a||a.message_id&&get('SELECT local_deleted FROM messages WHERE id=?',a.message_id)?.local_deleted)fail(404,'Tệp đã xoá.');
    if(!result?.data?.length)fail(410,'Không tải lại được tệp từ nền tảng; đường dẫn có thể đã hết hạn. Hãy mở tin gốc trên Facebook/Zalo.');
    put(id,result.data);run('UPDATE attachments SET mime=? WHERE id=?',result.mime,id);return {...row(),data:result.data};

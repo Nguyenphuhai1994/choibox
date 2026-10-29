@@ -1,3 +1,5 @@
+import {channelStatus} from './channel-status.mjs';
+import {facebookPersonal} from './facebook-personal.mjs';
 import {sharedFacebook} from "./shared-facebook.mjs";
 import {facebookConnect} from './facebook-connect.mjs';
 import {facebookHistory} from './facebook-history.mjs';
@@ -22,7 +24,7 @@ function verify(p,h){const [salt,key]=h.split(':');return timingSafeEqual(scrypt
 function validPassword(p){if(typeof p!=='string'||p.length<10||p.length>256)fail(400,'Mật khẩu cần từ 10 đến 256 ký tự.');}
 const safeChannel=c=>{const {secret,...rest}=c;return {...rest,configured:!!secret};};
 async function defaultTransport(url,options){const r=await fetch(url,{...options,signal:AbortSignal.timeout(options?.body instanceof FormData?60000:15000)});let d;try{d=await r.json();}catch{throw new Error('API trả về dữ liệu không hợp lệ');}if(!r.ok||d.error)throw providerFailure(d,r.status);return d;}
-export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryMs,connectTransport,connectPollMs=5000,fetchImage,dataDir=process.env.DATA_DIR||path.join(ROOT,'data'),transport=defaultTransport,publicUrl=process.env.PUBLIC_URL||'',setupToken=process.env.SETUP_TOKEN||'',extraHosts=process.env.ALLOWED_HOSTS||''}={}){
+export function createApp({facebookFactory,facebookFlowMs,facebookRetryMs,zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryMs,connectTransport,connectPollMs=5000,fetchImage,dataDir=process.env.DATA_DIR||path.join(ROOT,'data'),transport=defaultTransport,publicUrl=process.env.PUBLIC_URL||'',setupToken=process.env.SETUP_TOKEN||'',extraHosts=process.env.ALLOWED_HOSTS||''}={}){
  fs.mkdirSync(dataDir,{recursive:true,mode:0o700});fs.chmodSync(dataDir,0o700);
  const keyFile=path.join(dataDir,'secret.key');if(!fs.existsSync(keyFile))fs.writeFileSync(keyFile,randomBytes(32),{mode:0o600});
  const key=fs.readFileSync(keyFile);fs.chmodSync(keyFile,0o600);
@@ -59,15 +61,42 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
   }
   return originalTransport(target.href,options);
  };
+ let appClosing=false;
  const history=facebookHistory({db,decrypt,transport});
+ async function checkAuthChannel(c){
+  let health='Kênh thử nghiệm',verified=0;
+  if(c.mode==='live'){
+   if(!c.secret)return {health:'Chưa có thông tin kết nối.'};
+   try{
+    const s=decrypt(c.secret);
+    const d=c.provider==='facebook'?await transport('https://graph.facebook.com/'+s.graph_version+'/'+c.external_id+'?fields=id,name',{headers:{Authorization:'Bearer '+s.access_token}}):await transport('https://openapi.zalo.me/v2.0/oa/getoa',{headers:{access_token:s.access_token}});
+    const actual=d.id||d.data?.oa_id||d.data?.id;if(String(actual)!==c.external_id)throw Error();
+    health='Token hợp lệ';verified=1;
+   }catch{health='Quyền kết nối không hợp lệ. Cần kết nối lại.';}
+  }
+  if(appClosing)return {health};
+  const current=get('SELECT secret,enabled FROM channels WHERE id=?',c.id);
+  if(current?.secret===c.secret)run('UPDATE channels SET last_checked=?,health=?,verified=? WHERE id=?',now(),health,verified,c.id);
+  return {health};
+ }
+ let checkingChannels=false;
+ const channelHeartbeat=setInterval(async()=>{
+  if(appClosing||checkingChannels)return;checkingChannels=true;
+  try{
+   const rows=all("SELECT * FROM channels WHERE provider IN ('facebook','zalo') AND enabled=1 AND mode='live' AND secret IS NOT NULL");
+   let index=0;await Promise.all([0,1].map(async()=>{while(!appClosing&&index<rows.length){const c=rows[index++];await checkAuthChannel(c);}}));
+  }catch{/* A later round retries without interrupting message reception. */}
+  finally{checkingChannels=false;}
+ },300000);channelHeartbeat.unref?.();
  function tx(f){db.exec('BEGIN IMMEDIATE');try{const r=f();db.exec('COMMIT');return r;}catch(e){db.exec('ROLLBACK');throw e;}}
  function audit(u,c,a,d=''){run('INSERT INTO audit(user_id,conversation_id,action,detail,created) VALUES(?,?,?,?,?)',u?.id??null,c??null,a,clean(d,500),now());}
  function allowed(u,c,reply=false){if(u.role==='admin')return true;const g=get('SELECT * FROM grants WHERE user_id=? AND channel_id=?',u.id,c);return !!g&&(!reply||(g.can_reply&&u.role!=='viewer'));}
  function conversation(u,id,reply=false){const c=get('SELECT * FROM conversations WHERE id=?',id);if(!c||!allowed(u,c.channel_id,reply))fail(403,'Bạn không có quyền với hội thoại này.');return c;}
  function admin(u){if(u.role!=='admin')fail(403,'Chỉ quản trị viên được thao tác.');}
- let personal;
- const features=workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,conversation,audit,fetchImage,personalProfile:(c,o)=>personal?.profile(c,o),personalAuthorAvatar:(c,id)=>personal?.authorAvatar(c,id)});
+ let personal,fbPersonal;
+ const features=workspaceFeatures({db,dataDir,encrypt,decrypt,transport,allowed,conversation,audit,fetchImage,personalProfile:(c,o)=>get("SELECT provider FROM channels WHERE id=?",c.channel_id)?.provider==="facebook_personal"?fbPersonal?.profile(c,o):personal?.profile(c,o),personalAuthorAvatar:(c,id)=>personal?.authorAvatar(c,id),providerMedia:(channelId,descriptor)=>fbPersonal?.downloadMedia(channelId,descriptor)});
  personal=zaloPersonal({db,encrypt,decrypt,ingest,avatarBytes:features.avatarBytes,cacheIncomingAttachment:features.cacheIncomingAttachment,factory:zaloFactory,flowMs:zaloFlowMs,retryMs:zaloRetryMs,recoveryOptions:zaloRecoveryOptions});
+ fbPersonal=facebookPersonal({db,dataDir,encrypt,decrypt,ingest,avatarBytes:features.avatarBytes,cacheIncomingAttachment:features.cacheIncomingAttachment,cacheProviderAttachment:features.cacheProviderAttachment,factory:facebookFactory,flowMs:facebookFlowMs,retryMs:facebookRetryMs});
  function ingest(channel,external,name,messageId,body,created=now(),kind='incoming'){
   tx(()=>{let c=get('SELECT * FROM conversations WHERE channel_id=? AND external_id=?',channel.id,external);
    if(!c){const r=run('INSERT INTO conversations(channel_id,external_id,name,updated) VALUES(?,?,?,?)',channel.id,external,name||external,created);c=get('SELECT * FROM conversations WHERE id=?',r.lastInsertRowid);}
@@ -150,7 +179,7 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
    const localHost=new URL('http://'+(req.headers.host||'')).hostname;
    const allowedHosts=networkConfig.allowedHosts(extraHosts+(publicUrl?','+new URL(publicUrl).hostname:''));
    if(!allowedHosts.includes(localHost))fail(403,'Địa chỉ truy cập không được cho phép.');
-   if(p==='/api/health'&&req.method==='GET')return send(200,{app:'Choibox',version:'1.12.0'});
+   if(p==='/api/health'&&req.method==='GET')return send(200,{app:'Choibox',version:'1.13.1'});
    if(p==='/api/bootstrap'&&req.method==='GET')return send(200,{setup:!get('SELECT id FROM users LIMIT 1'),requires_setup_token:!!setupToken});
    const origin=req.headers.origin;if(origin){const o=new URL(origin);if(o.host!==req.headers.host||!['http:','https:'].includes(o.protocol))fail(403,'Nguồn yêu cầu không hợp lệ.');secure=secure||o.protocol==='https:';}
    if(p==='/api/setup'&&req.method==='POST'){
@@ -168,14 +197,15 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
     const token=(req.headers.cookie||'').match(/(?:^|;\s*)session=([a-f0-9]+)/)?.[1];const session=token&&get('SELECT * FROM sessions WHERE token=? AND expires>?',hash(token),Date.now());
     const u=session&&get('SELECT id,name,email,role,active FROM users WHERE id=? AND active=1',session.user_id);if(!u)fail(401,'Vui lòng đăng nhập.');
     if(req.method!=='GET'&&req.headers['x-csrf-token']!==session.csrf)fail(403,'Phiên không hợp lệ, hãy tải lại trang.');
+    if(await fbPersonal.api({p,req,body,u,session,send,audit}))return;
     if(await personal.api({p,req,body,u,session,send,audit}))return;
     if(await features.api({p,req,raw,body,u,send:(...args)=>{send(...args);return true;}}))return;
     if(await (shared||facebook).api({p,req,body,u,session,send,audit}))return;
     if(p==='/api/me')return send(200,{user:u,csrf:session.csrf});
-    if(p==='/api/logout'&&req.method==='POST'){personal.cancelSession(session);run('DELETE FROM sessions WHERE token=?',session.token);return send(200,{ok:true},undefined,{'Set-Cookie':'session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});}
+    if(p==='/api/logout'&&req.method==='POST'){personal.cancelSession(session);fbPersonal.cancelSession(session);run('DELETE FROM sessions WHERE token=?',session.token);return send(200,{ok:true},undefined,{'Set-Cookie':'session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'});}
     if(p==='/api/password'&&req.method==='POST'){validPassword(body.password);const old=get('SELECT password FROM users WHERE id=?',u.id);if(!verify(body.current||'',old.password))fail(400,'Mật khẩu hiện tại không đúng.');run('UPDATE users SET password=? WHERE id=?',password(body.password),u.id);run('DELETE FROM sessions WHERE user_id=? AND token<>?',u.id,session.token);audit(u,null,'Đổi mật khẩu');return send(200,{ok:true});}
     if(p==='/api/state'&&req.method==='GET'){
-     const channels=all('SELECT * FROM channels').filter(c=>allowed(u,c.id)).map(c=>({...safeChannel(c),...(c.provider==='zalo_personal'?{recovery:personal.syncState(c.id)}:{}),can_reply:allowed(u,c.id,true)}));const ids=new Set(channels.map(c=>c.id));
+     const channels=all('SELECT * FROM channels').filter(c=>allowed(u,c.id)).map(c=>({...safeChannel(c),connection:channelStatus(c,{runtime:c.provider==='facebook_personal'?fbPersonal.connectionState(c.id):c.provider==='zalo_personal'?personal.connectionState(c.id):null}),...(c.provider==='zalo_personal'?{recovery:personal.syncState(c.id)}:{}),can_reply:allowed(u,c.id,true)}));const ids=new Set(channels.map(c=>c.id));
      const conv=all('SELECT c.*,ch.name channel_name,ch.provider,ch.mode,u.name assignee_name FROM conversations c JOIN channels ch ON ch.id=c.channel_id LEFT JOIN users u ON u.id=c.assignee WHERE c.hidden_local=0 ORDER BY updated DESC').filter(c=>ids.has(c.channel_id));
      const names=new Set(conv.flatMap(c=>JSON.parse(c.tags)));return send(200,{...features.state(u),tag_colors:all('SELECT * FROM tag_colors').filter(t=>names.has(t.name)),channels,conversations:conv.map(c=>{const profile=features.profileState(c.id);return {...c,...profile,tags:JSON.parse(c.tags),preview:get("SELECT body FROM messages WHERE conversation_id=? AND kind NOT IN ('note','order') AND local_deleted=0 ORDER BY created DESC,id DESC LIMIT 1",c.id)?.body||''};}),users:all('SELECT id,name,role FROM users WHERE active=1'),replies:all('SELECT * FROM replies ORDER BY id')});
     }
@@ -228,14 +258,16 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
      if(action==='notes'&&req.method==='POST'){const text=clean(body.text,5000);if(!text)fail(400,'Ghi chú trống.');run("INSERT INTO messages(conversation_id,kind,body,sender_id,created,status) VALUES(?,'note',?,?,?,'internal')",id,text,u.id,now());audit(u,id,'Thêm ghi chú');return send(201,{ok:true});}
      if(action==='send'&&req.method==='POST'){
       if(c.kind==='comment'&&c.deleted)fail(400,'Bình luận gốc đã bị xóa, không thể trả lời.');
-      const ch=get('SELECT * FROM channels WHERE id=?',c.channel_id);if(!ch.enabled)fail(400,'Kênh đang tạm dừng.');if(ch.mode==='live'&&!ch.verified)fail(400,ch.provider==='zalo_personal'?'Zalo cá nhân chưa kết nối. Quản trị viên cần kiểm tra hoặc quét QR lại.':'Quản trị viên cần kiểm tra token đúng Page/OA trước khi gửi.');const text=clean(body.text,2001),rid=clean(body.request_id,80);if((!text&&!body.attachment_id)||text.length>2000||!rid)fail(400,'Nhập tin nhắn hoặc chọn tệp và mã yêu cầu.');if(body.attachment_id&&(text||c.kind==='comment'))fail(400,'Gửi tệp trong một tin nhắn riêng.');
+      const ch=get('SELECT * FROM channels WHERE id=?',c.channel_id);if(!ch.enabled)fail(400,'Kênh đang tạm dừng.');if(ch.mode==='live'&&!ch.verified)fail(400,ch.provider==='facebook_personal'?'Facebook cá nhân đang mất kết nối. Kiểm tra trạng thái kênh.':ch.provider==='zalo_personal'?'Zalo cá nhân chưa kết nối. Quản trị viên cần kiểm tra hoặc quét QR lại.':'Quản trị viên cần kiểm tra token đúng Page/OA trước khi gửi.');const text=clean(body.text,2001),rid=clean(body.request_id,80);if((!text&&!body.attachment_id)||text.length>2000||!rid)fail(400,'Nhập tin nhắn hoặc chọn tệp và mã yêu cầu.');if(body.attachment_id&&(text||c.kind==='comment'))fail(400,'Gửi tệp trong một tin nhắn riêng.');
       const old=get('SELECT * FROM messages WHERE conversation_id=? AND request_id=?',id,rid);if(old)return send(200,old);
+      if(ch.provider==='facebook_personal'&&body.attachment_id)fail(400,'Facebook cá nhân hiện chỉ hỗ trợ gửi văn bản.');
       const attachment=body.attachment_id?features.attachment(c,body.attachment_id):null;
       const msg=run("INSERT INTO messages(conversation_id,request_id,kind,body,sender_id,created,status,attachment_id) VALUES(?,?,'outgoing',?,?,?,'sending',?)",id,rid,attachment?'[Tệp: '+attachment.name+']':text,u.id,now(),attachment?.id||null);const mid=Number(msg.lastInsertRowid);
       if(attachment)run('UPDATE attachments SET message_id=? WHERE id=?',mid,attachment.id);
       try{let ext=null;if(ch.mode==='live'){
        if(!ch.secret)throw new Error('Kênh chưa có token.');const s=decrypt(ch.secret);let data;
-       if(ch.provider==='zalo_personal')data=await personal.send(c,text,attachment);
+       if(ch.provider==='facebook_personal')data=await fbPersonal.send(c,text,attachment);
+       else if(ch.provider==='zalo_personal')data=await personal.send(c,text,attachment);
        else if(attachment)data=await features.sendAttachment(ch,c,attachment);
        else if(ch.provider==='facebook'&&c.kind==='comment')data=await transport(`https://graph.facebook.com/${s.graph_version}/${encodeURIComponent(c.comment_id)}/comments`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.access_token},body:JSON.stringify({message:text})});
        else if(ch.provider==='facebook')data=await transport(`https://graph.facebook.com/${s.graph_version}/${ch.external_id}/messages`,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.access_token},body:JSON.stringify({recipient:{id:c.external_id},messaging_type:'RESPONSE',message:{text}})});
@@ -262,13 +294,13 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
       if(body.confirm!==true)fail(400,'Cần xác nhận xoá kênh và lịch sử trong Choibox.');
       const ids=all('SELECT m.id,m.status FROM messages m JOIN conversations co ON co.id=m.conversation_id WHERE co.channel_id=?',c.id);
       if(ids.some(m=>m.status==='sending'||moderationBusy.has(m.id)))fail(409,'Kênh đang gửi hoặc xử lý nội dung. Thử lại sau.');
-      if(c.provider==='zalo_personal')personal.stop(c.id);
+      if(c.provider==='zalo_personal')personal.stop(c.id);if(c.provider==='facebook_personal')await fbPersonal.remove(c);
       if(shared)await shared.release(c);
       tx(()=>{run('DELETE FROM facebook_comments WHERE channel_id=?',c.id);run('DELETE FROM messages WHERE conversation_id IN (SELECT id FROM conversations WHERE channel_id=?)',c.id);run('DELETE FROM audit WHERE conversation_id IN (SELECT id FROM conversations WHERE channel_id=?)',c.id);run('DELETE FROM conversations WHERE channel_id=?',c.id);run('DELETE FROM grants WHERE channel_id=?',c.id);run('DELETE FROM channels WHERE id=?',c.id);audit(u,null,'Xoá kênh khỏi Choibox',c.name);});return send(200,{ok:true});
      }
-     if(m[2]==='credentials'&&req.method==='POST'){if(c.provider==='zalo_personal')fail(400,'Zalo cá nhân cần kết nối lại bằng mã QR.');if(c.mode==='demo')fail(400,'Kênh thử nghiệm không có token.');const s=decrypt(c.secret);for(const k of ['access_token','app_secret','app_id','verify_token','graph_version'])if(body[k])s[k]=clean(body[k],4096);if(!/^v\d+\.\d+$/.test(s.graph_version)||c.provider==='zalo'&&!/^\d+$/.test(s.app_id))fail(400,'Cấu hình không hợp lệ.');run('UPDATE channels SET secret=?,health=?,verified=0 WHERE id=?',encrypt(s),'Cần kiểm tra lại',c.id);audit(u,null,'Cập nhật token',c.name);return send(200,{ok:true});}
-     if(!m[2]&&req.method==='PATCH'){run('UPDATE channels SET enabled=? WHERE id=?',body.enabled?1:0,c.id);if(c.provider==='zalo_personal')personal.toggle(c,!!body.enabled);audit(u,null,body.enabled?'Bật kênh':'Tạm dừng kênh',c.name);return send(200,{ok:true});}
-     if(m[2]==='check'&&req.method==='POST'){if(c.provider==='zalo_personal')return send(200,personal.check(c));let health='Kênh thử nghiệm';if(c.mode==='live'){const s=decrypt(c.secret);try{const d=c.provider==='facebook'?await transport(`https://graph.facebook.com/${s.graph_version}/${c.external_id}?fields=id,name`,{headers:{Authorization:'Bearer '+s.access_token}}):await transport('https://openapi.zalo.me/v2.0/oa/getoa',{headers:{access_token:s.access_token}});const actual=d.id||d.data?.oa_id||d.data?.id;if(String(actual)!==c.external_id)throw Error();health='Token hợp lệ';}catch{health='Token hoặc quyền không hợp lệ';}}run('UPDATE channels SET last_checked=?,health=?,verified=? WHERE id=?',now(),health,health==='Token hợp lệ'?1:0,c.id);return send(200,{health});}
+     if(m[2]==='credentials'&&req.method==='POST'){if(c.provider==='facebook_personal')fail(400,'Facebook cá nhân cần đăng nhập lại để kết nối.');if(c.provider==='zalo_personal')fail(400,'Zalo cá nhân cần kết nối lại bằng mã QR.');if(c.mode==='demo')fail(400,'Kênh thử nghiệm không có token.');const s=decrypt(c.secret);for(const k of ['access_token','app_secret','app_id','verify_token','graph_version'])if(body[k])s[k]=clean(body[k],4096);if(!/^v\d+\.\d+$/.test(s.graph_version)||c.provider==='zalo'&&!/^\d+$/.test(s.app_id))fail(400,'Cấu hình không hợp lệ.');run('UPDATE channels SET secret=?,health=?,verified=0 WHERE id=?',encrypt(s),'Cần kiểm tra lại',c.id);audit(u,null,'Cập nhật token',c.name);return send(200,{ok:true});}
+     if(!m[2]&&req.method==='PATCH'){run('UPDATE channels SET enabled=? WHERE id=?',body.enabled?1:0,c.id);if(c.provider==='zalo_personal')personal.toggle(c,!!body.enabled);if(c.provider==='facebook_personal')fbPersonal.toggle(c,!!body.enabled);audit(u,null,body.enabled?'Bật kênh':'Tạm dừng kênh',c.name);return send(200,{ok:true});}
+     if(m[2]==='check'&&req.method==='POST'){if(c.provider==='facebook_personal')return send(200,await fbPersonal.check(c));if(c.provider==='zalo_personal')return send(200,personal.check(c));return send(200,await checkAuthChannel(c));}
     }
     if(p==='/api/access'&&req.method==='GET'){admin(u);const port=req.socket.localPort;return send(200,{public_url:publicUrl,login_urls:publicUrl?[publicUrl]:networkConfig.localAddresses().map(ip=>`http://${ip}:${port}`),single_admin:true,connection_file:{app:'Choibox',serverUrl:publicUrl||('http://'+req.headers.host)}});}
     if(p==='/api/users'&&req.method==='GET'){admin(u);return send(200,all('SELECT id,name,email,role,active FROM users').map(x=>({...x,grants:all('SELECT channel_id,can_reply FROM grants WHERE user_id=?',x.id)})));}
@@ -289,14 +321,14 @@ export function createApp({zaloRecoveryOptions,zaloFactory,zaloFlowMs,zaloRetryM
     }
     fail(404,'API không tồn tại.');
    }
-   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
+   if(req.method!=='GET')fail(405,'Method không hỗ trợ.');const files={'/':'index.html','/app.js':'app.js','/message-layout.js':'message-layout.js','/workspace-ui.js':'workspace-ui.js','/zalo-personal-ui.js':'zalo-personal-ui.js','/facebook-personal-ui.js':'facebook-personal-ui.js','/style.css':'style.css','/logo.png':'logo.png'};const f=files[p];if(!f)fail(404,'Không tìm thấy.');
    const type=f.endsWith('.png')?'image/png':f.endsWith('.js')?'text/javascript; charset=utf-8':f.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
    send(200,fs.readFileSync(path.join(ROOT,'public',f)),type,{'Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"});
   }catch(e){send(e.status||500,{error:e.status?e.message:'Có lỗi xử lý. Vui lòng thử lại.'});}
  });
  server.requestTimeout=120000;server.headersTimeout=10000;
- server.on('close',()=>{features.close();personal.close();shared?.close();});
- return {server,db,ingest,shared,personal,setPublicUrl(url){publicUrl=url?networkConfig.normalizeServerUrl(url):'';},close(){features.close();personal.close();shared?.close();server.close();db.close();}};
+ server.on('close',()=>{appClosing=true;clearInterval(channelHeartbeat);features.close();personal.close();fbPersonal.close();shared?.close();});
+ return {server,db,ingest,shared,personal,fbPersonal,setPublicUrl(url){publicUrl=url?networkConfig.normalizeServerUrl(url):'';},close(){appClosing=true;clearInterval(channelHeartbeat);features.close();personal.close();fbPersonal.close();shared?.close();server.close();db.close();}};
 }
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  const app=createApp(),port=Number(process.env.PORT||4317),host=process.env.HOST||'127.0.0.1';

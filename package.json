@@ -1,8 +1,8 @@
 {
   "name": "choibox",
   "productName": "Choibox",
-  "version": "1.12.1",
-  "description": "Hop thu chung Facebook Page, Zalo ca nhan va Zalo OA - Choiagency",
+  "version": "1.13.1",
+  "description": "Hộp thư chung Facebook Page, Facebook cá nhân, Zalo cá nhân và Zalo OA - Choiagency",
   "author": "Choiagency",
   "license": "UNLICENSED",
   "private": true,
@@ -11,10 +11,13 @@
   "scripts": {
     "start": "node server.mjs",
     "desktop": "electron .",
-    "test": "node --test tests.mjs workspace-features.test.mjs customer-profile.test.mjs desktop/config.test.mjs connect-service.test.mjs cloudflare/core.test.mjs deploy/connect/legacy-forwarder.test.mjs zalo-personal.test.mjs zalo-recovery.test.mjs media-cache.test.mjs message-layout.test.mjs",
+    "test": "node --test tests.mjs workspace-features.test.mjs customer-profile.test.mjs desktop/config.test.mjs connect-service.test.mjs cloudflare/core.test.mjs deploy/connect/legacy-forwarder.test.mjs zalo-personal.test.mjs zalo-recovery.test.mjs media-cache.test.mjs message-layout.test.mjs facebook-personal.test.mjs channel-status.test.mjs scripts/prepare-facebook.test.mjs",
     "test:cloudflare": "node --test cloudflare/core.test.mjs",
-    "build:mac": "electron-builder --mac zip --x64 --arm64 --publish never",
-    "build:win": "electron-builder --win zip --x64 --publish never"
+    "build:mac": "npm run build:facebook -- --targets=darwin-amd64,darwin-arm64 && electron-builder --mac zip --x64 --arm64 --publish never",
+    "build:win": "npm run build:facebook -- --targets=windows-amd64 && electron-builder --win zip --x64 --publish never",
+    "build:facebook": "node connectors/facebook-personal/build.mjs",
+    "prepare:facebook": "node scripts/prepare-facebook.mjs",
+    "prestart": "npm run prepare:facebook"
   },
   "engines": {
     "node": ">=22.13"
@@ -49,7 +52,10 @@
       "zalo-personal.mjs",
       "zalo-content.mjs",
       "zalo-recovery.mjs",
-      "media-cache.mjs"
+      "media-cache.mjs",
+      "facebook-personal.mjs",
+      "connectors/facebook-personal/**/*",
+      "channel-status.mjs"
     ],
     "mac": {
       "category": "public.app-category.business",
@@ -93,6 +99,9 @@
         "from": "node_modules/zca-js/LICENSE",
         "to": "licenses/zca-js-LICENSE.txt"
       }
+    ],
+    "asarUnpack": [
+      "connectors/facebook-personal/bin/**/*"
     ]
   },
   "dependencies": {
